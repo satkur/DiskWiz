@@ -13,6 +13,9 @@
 #include <mutex>
 #include <queue>
 #include <condition_variable>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -219,44 +222,63 @@ void collectTargetPaths(const fs::path& root, int currentDepth, int maxDepth,
     } catch (...) {}
 }
 
-// スクリーンクリア関数（Windows用）
-void clearScreen() {
-    system("cls");
+// カーソル制御用の関数を追加
+void moveCursorToTop() {
+    std::cout << "\033[H"; // カーソルを画面の先頭に移動
 }
 
-// 結果表示関数
+void clearToEndOfLine() {
+    std::cout << "\033[K"; // カーソルから行末までクリア
+}
+
+// 結果表示関数を修正
 void displayResults(const ResultManager& manager, size_t limit) {
-    clearScreen();
-    auto results = manager.getTopN(limit);
+    moveCursorToTop();
 
     // 進捗表示
     size_t completed = manager.completedTargets();
     size_t total = manager.totalTargets();
     std::cout << "Progress: " << completed << "/" << total
         << " (" << (total > 0 ? (completed * 100 / total) : 0) << "%)\n\n";
+    clearToEndOfLine();
 
     // ランキング表示
     std::cout << "=== Top " << limit << " Largest Files/Folders ===\n";
-    for (size_t i = 0; i < results.size(); ++i) {
-        const auto& info = results[i];
-        if (info.calculated) {
-            std::cout << (i + 1) << ". " << info.path.string()
-                << " : " << std::fixed << std::setprecision(2)
-                << toGB(info.size) << " GB"
-                << (info.isPartial ? "+" : "")
-                << " (" << info.elapsed.count() / 1000.0 << " sec)\n";
-        } else {
-            std::cout << (i + 1) << ". " << info.path.string()
-                << " : calculating...\n";
+    clearToEndOfLine();
+
+    for (size_t i = 0; i < limit; ++i) {
+        auto results = manager.getTopN(limit);
+        if (i < results.size()) {
+            const auto& info = results[i];
+            if (info.calculated) {
+                std::cout << (i + 1) << ". " << info.path.string()
+                    << " : " << std::fixed << std::setprecision(2)
+                    << toGB(info.size) << " GB"
+                    << (info.isPartial ? "+" : "")
+                    << " (" << info.elapsed.count() / 1000.0 << " sec)";
+            } else {
+                std::cout << (i + 1) << ". " << info.path.string()
+                    << " : calculating...";
+            }
         }
+        std::cout << "\n";
+        clearToEndOfLine();
     }
 }
 
 int main() {
+#ifdef _WIN32
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dwMode = 0;
+    GetConsoleMode(hOut, &dwMode);
+    dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    SetConsoleMode(hOut, dwMode);
+#endif
+
     std::cout.setf(std::ios::unitbuf);
     const int MAX_DEPTH = 3;
     const size_t DISPLAY_LIMIT = 16;
-    const int DISPLAY_FPS = 1;
+    const int DISPLAY_FPS = 2;
     const auto DISPLAY_INTERVAL = std::chrono::milliseconds(1000 / DISPLAY_FPS);
 
     ResultManager manager;
@@ -271,26 +293,26 @@ int main() {
 
     for (const auto& target : results) {
         calculationTasks.push_back(std::async(std::launch::async,
-                                   [&manager](const fs::path& path) {
-                                       auto startTime = std::chrono::steady_clock::now();
-                                       std::uintmax_t size;
-                                       bool isPartial = false;
-                                       try {
-                                           if (fs::is_directory(path)) {
-                                               auto [dirSize, partial] = calculateDirectorySizeWithTimeout(path, startTime, manager);
-                                               size = dirSize;
-                                               isPartial = partial;
-                                           } else {
-                                               size = fs::file_size(path);
-                                           }
-                                       } catch (...) {
-                                           size = 0;
-                                       }
-                                       auto endTime = std::chrono::steady_clock::now();
-                                       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                           endTime - startTime);
-                                       manager.update(path, size, isPartial, elapsed);
-                                   }, target.path
+            [&manager](const fs::path& path) {
+                auto startTime = std::chrono::steady_clock::now();
+                std::uintmax_t size;
+                bool isPartial = false;
+                try {
+                    if (fs::is_directory(path)) {
+                        auto [dirSize, partial] = calculateDirectorySizeWithTimeout(path, startTime, manager);
+                        size = dirSize;
+                        isPartial = partial;
+                    } else {
+                        size = fs::file_size(path);
+                    }
+                } catch (...) {
+                    size = 0;
+                }
+                auto endTime = std::chrono::steady_clock::now();
+                auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    endTime - startTime);
+                manager.update(path, size, isPartial, elapsed);
+            }, target.path
         ));
     }
 
