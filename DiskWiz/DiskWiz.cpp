@@ -114,14 +114,13 @@ double toGB(std::uintmax_t bytes) {
 // 集計単位の判定用関数
 bool isTargetUnit(const fs::path& path, int depth) {
     try {
-        // シンボリックリンクは集計対象外
-        if (fs::is_symlink(path)) {
-            return false;
-        }
-
-        if (depth == 0) {
-            // ルート直下のファイルは集計単位
-            return fs::is_regular_file(path);
+        // パス上のどこかにシンボリックリンクがある場合は除外
+        fs::path current;
+        for (const auto& part : path) {
+            current /= part;
+            if (fs::is_symlink(current)) {
+                return false;
+            }
         }
 
         // パスの階層数をカウント
@@ -276,7 +275,7 @@ int main() {
 #endif
 
     std::cout.setf(std::ios::unitbuf);
-    const int MAX_DEPTH = 3;
+    const int MAX_DEPTH = 4;
     const size_t DISPLAY_LIMIT = 16;
     const int DISPLAY_FPS = 2;
     const auto DISPLAY_INTERVAL = std::chrono::milliseconds(1000 / DISPLAY_FPS);
